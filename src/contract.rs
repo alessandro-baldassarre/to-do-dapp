@@ -2,10 +2,11 @@
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{to_binary, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdResult};
 use cw2::set_contract_version;
+use cw_controllers::Admin;
 
 use crate::error::ContractError;
-use crate::msg::{ExecuteMsg, GetCountResponse, InstantiateMsg, QueryMsg};
-use crate::state::{State, STATE};
+use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
+use crate::state::LIST_SEQ;
 
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:to-do-dapp";
@@ -13,144 +14,182 @@ const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn instantiate(
-    deps: DepsMut,
+    mut deps: DepsMut,
     _env: Env,
     info: MessageInfo,
     msg: InstantiateMsg,
 ) -> Result<Response, ContractError> {
-    let state = State {
-        count: msg.count,
-        owner: info.sender.clone(),
-    };
     set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
-    STATE.save(deps.storage, &state)?;
 
-    Ok(Response::new()
-        .add_attribute("method", "instantiate")
-        .add_attribute("owner", info.sender)
-        .add_attribute("count", msg.count.to_string()))
+    let admin_addr = msg
+        .admin
+        .map(|addr| deps.api.addr_validate(&addr))
+        .transpose()?
+        .unwrap_or(info.sender);
+
+    let admin = Admin::new("admin");
+    admin.set(deps.branch(), Some(admin_addr))?;
+
+    LIST_SEQ.save(deps.storage, &0u64)?;
+
+    Ok(Response::new().add_attribute("method", "instantiate"))
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn execute(
     deps: DepsMut,
-    _env: Env,
+    env: Env,
     info: MessageInfo,
     msg: ExecuteMsg,
 ) -> Result<Response, ContractError> {
     match msg {
-        ExecuteMsg::Increment {} => execute::increment(deps),
-        ExecuteMsg::Reset { count } => execute::reset(deps, info, count),
+        ExecuteMsg::AddToDo { task, expiration } => {
+            execute::add_to_do(deps, env, info, task, expiration)
+        }
+        _ => unimplemented!(),
     }
 }
 
 pub mod execute {
+    use std::ops::Add;
+
+    use cosmwasm_std::ensure;
+    use cw_utils::Expiration;
+
+    use crate::state::{ToDo, LIST};
+
     use super::*;
 
-    pub fn increment(deps: DepsMut) -> Result<Response, ContractError> {
-        STATE.update(deps.storage, |mut state| -> Result<_, ContractError> {
-            state.count += 1;
-            Ok(state)
-        })?;
+    pub fn add_to_do(
+        deps: DepsMut,
+        _env: Env,
+        info: MessageInfo,
+        task: String,
+        expiration: Option<Expiration>,
+    ) -> Result<Response, ContractError> {
+        let admin = Admin::new("admin");
+        let admin_addr = admin.get(deps.as_ref())?.unwrap();
 
-        Ok(Response::new().add_attribute("action", "increment"))
-    }
+        ensure!(info.sender == admin_addr, ContractError::Unauthorized {});
+        let task_id =
+            LIST_SEQ.update::<_, cosmwasm_std::StdError>(deps.storage, |id| Ok(id.add(1)))?;
+        let new_task = ToDo {
+            task_id,
+            task,
+            expiration: expiration.unwrap_or(Expiration::Never {}),
+        };
 
-    pub fn reset(deps: DepsMut, info: MessageInfo, count: i32) -> Result<Response, ContractError> {
-        STATE.update(deps.storage, |mut state| -> Result<_, ContractError> {
-            if info.sender != state.owner {
-                return Err(ContractError::Unauthorized {});
-            }
-            state.count = count;
-            Ok(state)
-        })?;
-        Ok(Response::new().add_attribute("action", "reset"))
+        LIST.save(deps.storage, task_id, &new_task)?;
+
+        Ok(Response::new()
+            .add_attribute("method", "add_to_do")
+            .add_attribute("task_id", task_id.to_string()))
     }
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
-        QueryMsg::GetCount {} => to_binary(&query::count(deps)?),
+        QueryMsg::AmIAdmin { addr } => to_binary(&query::am_i_admin(deps, &addr)?),
+        QueryMsg::GetToDo { task_id } => to_binary(&query::get_to_do(deps, task_id)?),
+        // QueryMsg::GetList { start_after, limit } => unimplemented!(),
+        _ => unimplemented!(),
     }
 }
 
 pub mod query {
+    use cosmwasm_std::StdError;
+
+    use crate::{msg::GetToDoResponse, state::LIST};
+
     use super::*;
 
-    pub fn count(deps: Deps) -> StdResult<GetCountResponse> {
-        let state = STATE.load(deps.storage)?;
-        Ok(GetCountResponse { count: state.count })
+    pub fn am_i_admin(deps: Deps, addr: &str) -> StdResult<bool> {
+        let addr = deps.api.addr_validate(addr)?;
+        let admin = Admin::new("admin");
+        let res = admin.is_admin(deps, &addr)?;
+        Ok(res)
+    }
+
+    pub fn get_to_do(deps: Deps, task_id: u64) -> StdResult<GetToDoResponse> {
+        let task = LIST
+            .may_load(deps.storage, task_id)?
+            .ok_or(StdError::GenericErr {
+                msg: "Task non found".to_owned(),
+            })?;
+        let res = GetToDoResponse {
+            task_id: task.task_id,
+            task: task.task,
+            expiration: task.expiration,
+        };
+        Ok(res)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::msg::GetToDoResponse;
+
     use super::*;
     use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
     use cosmwasm_std::{coins, from_binary};
+    use cw_utils::Expiration;
 
     #[test]
     fn proper_initialization() {
         let mut deps = mock_dependencies();
 
-        let msg = InstantiateMsg { count: 17 };
+        let msg = InstantiateMsg {
+            admin: Some("creator".to_owned()),
+        };
         let info = mock_info("creator", &coins(1000, "earth"));
 
         // we can just call .unwrap() to assert this was a success
         let res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
         assert_eq!(0, res.messages.len());
 
+        let info = mock_info("creator", &coins(1000, "earth"));
         // it worked, let's query the state
-        let res = query(deps.as_ref(), mock_env(), QueryMsg::GetCount {}).unwrap();
-        let value: GetCountResponse = from_binary(&res).unwrap();
-        assert_eq!(17, value.count);
+        let res = query(
+            deps.as_ref(),
+            mock_env(),
+            QueryMsg::AmIAdmin {
+                addr: info.sender.to_string(),
+            },
+        )
+        .unwrap();
+        let value: bool = from_binary(&res).unwrap();
+        assert!(value);
     }
 
     #[test]
-    fn increment() {
+    fn add_task() {
         let mut deps = mock_dependencies();
 
-        let msg = InstantiateMsg { count: 17 };
-        let info = mock_info("creator", &coins(2, "token"));
+        let msg = InstantiateMsg {
+            admin: Some("creator".to_owned()),
+        };
+        let info = mock_info("creator", &coins(1000, "earth"));
+        // we can just call .unwrap() to assert this was a success
         let _res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
 
-        // beneficiary can release it
-        let info = mock_info("anyone", &coins(2, "token"));
-        let msg = ExecuteMsg::Increment {};
+        let info = mock_info("creator", &coins(1000, "earth"));
+        let msg = ExecuteMsg::AddToDo {
+            task: "write the best CosmWasm contract".to_owned(),
+            expiration: None,
+        };
         let _res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
 
-        // should increase counter by 1
-        let res = query(deps.as_ref(), mock_env(), QueryMsg::GetCount {}).unwrap();
-        let value: GetCountResponse = from_binary(&res).unwrap();
-        assert_eq!(18, value.count);
-    }
-
-    #[test]
-    fn reset() {
-        let mut deps = mock_dependencies();
-
-        let msg = InstantiateMsg { count: 17 };
-        let info = mock_info("creator", &coins(2, "token"));
-        let _res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
-
-        // beneficiary can release it
-        let unauth_info = mock_info("anyone", &coins(2, "token"));
-        let msg = ExecuteMsg::Reset { count: 5 };
-        let res = execute(deps.as_mut(), mock_env(), unauth_info, msg);
-        match res {
-            Err(ContractError::Unauthorized {}) => {}
-            _ => panic!("Must return unauthorized error"),
-        }
-
-        // only the original creator can reset the counter
-        let auth_info = mock_info("creator", &coins(2, "token"));
-        let msg = ExecuteMsg::Reset { count: 5 };
-        let _res = execute(deps.as_mut(), mock_env(), auth_info, msg).unwrap();
-
-        // should now be 5
-        let res = query(deps.as_ref(), mock_env(), QueryMsg::GetCount {}).unwrap();
-        let value: GetCountResponse = from_binary(&res).unwrap();
-        assert_eq!(5, value.count);
+        // should increase task_id by 1
+        let res = query(deps.as_ref(), mock_env(), QueryMsg::GetToDo { task_id: 1 }).unwrap();
+        let value: GetToDoResponse = from_binary(&res).unwrap();
+        assert_eq!(
+            GetToDoResponse {
+                task_id: 1,
+                task: "write the best CosmWasm contract".to_owned(),
+                expiration: Expiration::Never {}
+            },
+            value
+        );
     }
 }
