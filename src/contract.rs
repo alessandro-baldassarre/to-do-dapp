@@ -46,14 +46,19 @@ pub fn execute(
         ExecuteMsg::AddToDo { task, expiration } => {
             execute::add_to_do(deps, env, info, task, expiration)
         }
-        _ => unimplemented!(),
+        ExecuteMsg::UpdateToDo {
+            task_id,
+            updated_task,
+            expiration,
+        } => execute::update_to_do(deps, env, info, task_id, updated_task, expiration),
+        ExecuteMsg::DeleteToDo { task_id } => execute::delete_to_do(deps, info, task_id),
     }
 }
 
 pub mod execute {
     use std::ops::Add;
 
-    use cosmwasm_std::ensure;
+    use cosmwasm_std::{ensure, StdError};
     use cw_utils::Expiration;
 
     use crate::state::{ToDo, LIST};
@@ -85,6 +90,46 @@ pub mod execute {
             .add_attribute("method", "add_to_do")
             .add_attribute("task_id", task_id.to_string()))
     }
+
+    pub fn update_to_do(
+        deps: DepsMut,
+        _env: Env,
+        info: MessageInfo,
+        task_id: u64,
+        updated_task: Option<String>,
+        expiration: Option<Expiration>,
+    ) -> Result<Response, ContractError> {
+        let admin = Admin::new("admin");
+        let admin_addr = admin.get(deps.as_ref())?.ok_or(StdError::GenericErr {
+            msg: "admin not found".to_owned(),
+        })?;
+        ensure!(admin_addr == info.sender, ContractError::Unauthorized {});
+
+        LIST.update(deps.storage, task_id, |task| -> StdResult<_> {
+            let updated_task = ToDo {
+                task: updated_task.unwrap_or(task.clone().unwrap().task),
+                expiration: expiration.unwrap_or(Expiration::Never {}),
+                ..task.unwrap()
+            };
+            Ok(updated_task)
+        })?;
+
+        Ok(Response::new().add_attribute("action", "updated_task"))
+    }
+
+    pub fn delete_to_do(
+        deps: DepsMut,
+        info: MessageInfo,
+        task_id: u64,
+    ) -> Result<Response, ContractError> {
+        let admin = Admin::new("admin");
+        let admin_addr = admin.get(deps.as_ref())?.ok_or(StdError::GenericErr {
+            msg: "Admin not found".to_owned(),
+        })?;
+        ensure!(admin_addr == info.sender, ContractError::Unauthorized {});
+        LIST.remove(deps.storage, task_id);
+        Ok(Response::new().add_attribute("action", "delete_to_do".to_owned()))
+    }
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
@@ -92,15 +137,20 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
         QueryMsg::AmIAdmin { addr } => to_binary(&query::am_i_admin(deps, &addr)?),
         QueryMsg::GetToDo { task_id } => to_binary(&query::get_to_do(deps, task_id)?),
-        // QueryMsg::GetList { start_after, limit } => unimplemented!(),
-        _ => unimplemented!(),
+        QueryMsg::GetList { start_after, limit } => {
+            to_binary(&query::get_list(deps, start_after, limit)?)
+        }
     }
 }
 
 pub mod query {
-    use cosmwasm_std::StdError;
+    use cosmwasm_std::{Order, StdError};
+    use cw_storage_plus::Bound;
 
-    use crate::{msg::GetToDoResponse, state::LIST};
+    use crate::{
+        msg::{GetList, GetToDoResponse},
+        state::LIST,
+    };
 
     use super::*;
 
@@ -124,6 +174,28 @@ pub mod query {
         };
         Ok(res)
     }
+
+    // Limits for pagination
+    const MAX_LIMIT: u32 = 30;
+    const DEFAULT_LIMIT: u32 = 10;
+
+    pub fn get_list(
+        deps: Deps,
+        start_after: Option<u64>,
+        limit: Option<u32>,
+    ) -> StdResult<GetList> {
+        let limit = limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT) as usize;
+        let start = start_after.map(Bound::exclusive);
+        let entries: StdResult<Vec<_>> = LIST
+            .range(deps.storage, start, None, Order::Ascending)
+            .take(limit)
+            .collect();
+        let result = GetList {
+            tasks: entries?.into_iter().map(|l| l.1).collect(),
+        };
+
+        Ok(result)
+    }
 }
 
 #[cfg(test)]
@@ -132,7 +204,7 @@ mod tests {
 
     use super::*;
     use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
-    use cosmwasm_std::{coins, from_binary};
+    use cosmwasm_std::{coins, from_binary, StdError};
     use cw_utils::Expiration;
 
     #[test]
@@ -190,6 +262,75 @@ mod tests {
                 expiration: Expiration::Never {}
             },
             value
+        );
+    }
+
+    #[test]
+    fn update_task() {
+        let mut deps = mock_dependencies();
+
+        let msg = InstantiateMsg {
+            admin: Some("creator".to_owned()),
+        };
+        let info = mock_info("creator", &coins(1000, "earth"));
+        // we can just call .unwrap() to assert this was a success
+        let _res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
+
+        let info = mock_info("creator", &coins(1000, "earth"));
+        let msg = ExecuteMsg::AddToDo {
+            task: "write the best CosmWasm contract".to_owned(),
+            expiration: None,
+        };
+        let _res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
+
+        let info = mock_info("creator", &coins(1000, "earth"));
+        let msg = ExecuteMsg::UpdateToDo {
+            task_id: 1,
+            updated_task: Some("update the best CosmWasm contract".to_owned()),
+            expiration: None,
+        };
+        let _res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
+        // should increase task_id by 1
+        let res = query(deps.as_ref(), mock_env(), QueryMsg::GetToDo { task_id: 1 }).unwrap();
+        let value: GetToDoResponse = from_binary(&res).unwrap();
+        assert_eq!(
+            GetToDoResponse {
+                task_id: 1,
+                task: "update the best CosmWasm contract".to_owned(),
+                expiration: Expiration::Never {}
+            },
+            value
+        );
+    }
+
+    #[test]
+    fn delete_task() {
+        let mut deps = mock_dependencies();
+
+        let msg = InstantiateMsg {
+            admin: Some("creator".to_owned()),
+        };
+        let info = mock_info("creator", &coins(1000, "earth"));
+        // we can just call .unwrap() to assert this was a success
+        let _res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
+
+        let info = mock_info("creator", &coins(1000, "earth"));
+        let msg = ExecuteMsg::AddToDo {
+            task: "write the best CosmWasm contract".to_owned(),
+            expiration: None,
+        };
+        let _res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
+
+        let info = mock_info("creator", &coins(1000, "earth"));
+        let msg = ExecuteMsg::DeleteToDo { task_id: 1 };
+        let _res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
+        // should return error because we delete the task
+        let res = query(deps.as_ref(), mock_env(), QueryMsg::GetToDo { task_id: 1 }).unwrap_err();
+        assert_eq!(
+            StdError::GenericErr {
+                msg: "Task non found".to_owned(),
+            },
+            res
         );
     }
 }
