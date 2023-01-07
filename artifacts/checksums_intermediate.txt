@@ -1,0 +1,1 @@
+a317f59e635593b03ba30bb1e4ff1e560cb5fb533d5de6c23230e93491a82dd2  ./target/wasm32-unknown-unknown/release/to_do_dapp.wasm
