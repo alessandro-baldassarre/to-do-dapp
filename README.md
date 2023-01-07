@@ -10,4 +10,3 @@ This Dapp (Decentralized application) is implemented with CosmWasm contracts wri
 ## Smart Contract Architecture
 
 ![To-Do Dapp](https://user-images.githubusercontent.com/94307074/209864433-26aced27-f578-41d5-ba62-33a86d1aa2a8.jpg)
-
