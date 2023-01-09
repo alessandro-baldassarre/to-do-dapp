@@ -1,7 +1,12 @@
 use cosmwasm_schema::{cw_serde, QueryResponses};
 use cw_utils::Expiration;
 
-use crate::state::ToDo;
+#[cw_serde]
+pub struct ToDoResponse {
+    pub task_id: u64,
+    pub task: String,
+    pub expiration: Expiration,
+}
 
 #[cw_serde]
 pub struct InstantiateMsg {
@@ -48,5 +53,5 @@ pub struct GetToDoResponse {
 
 #[cw_serde]
 pub struct GetList {
-    pub tasks: Vec<ToDo>,
+    pub tasks: Vec<ToDoResponse>,
 }
