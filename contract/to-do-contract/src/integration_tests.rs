@@ -1,19 +1,15 @@
 #[cfg(test)]
 mod tests {
     use crate::contract;
-    use boot_core::networks;
     use boot_core::prelude::*;
     use cosmwasm_std::Addr;
     use cw_multi_test::ContractWrapper;
     use interfaces::contract::ToDoContract;
-    use semver::Version;
+    // use semver::Version;
 
-    use to_do_dapp_package::contract::ExecuteMsg;
-    use to_do_dapp_package::contract::InstantiateMsg;
-    use to_do_dapp_package::contract::QueryMsg;
-    use to_do_dapp_package::contract::ToDoResponse;
+    use to_do_dapp_package::contract::{ExecuteMsg, QueryMsg, ToDoResponse};
 
-    const TEST_VERSION: Version = Version::new(0, 0, 0);
+    // const TEST_VERSION: Version = Version::new(0, 0, 0);
 
     fn setup() -> anyhow::Result<ToDoContract<Mock>> {
         let sender = Addr::unchecked("sender");
