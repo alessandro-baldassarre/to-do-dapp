@@ -5,8 +5,8 @@ use cw2::set_contract_version;
 use cw_controllers::Admin;
 
 use crate::error::ContractError;
-use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
 use crate::state::LIST_SEQ;
+use to_do_dapp_package::contract::{ExecuteMsg, InstantiateMsg, QueryMsg};
 
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:to-do-dapp";
@@ -137,20 +137,21 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
         QueryMsg::AmIAdmin { addr } => to_binary(&query::am_i_admin(deps, &addr)?),
         QueryMsg::GetToDo { task_id } => to_binary(&query::get_to_do(deps, task_id)?),
-        QueryMsg::GetList { start_after, limit } => {
-            to_binary(&query::get_list(deps, start_after, limit)?)
+        QueryMsg::GetList {
+            start_after: _,
+            limit: _,
+        } => {
+            // to_binary(&query::get_list(deps, start_after, limit)?)
+            unimplemented!()
         }
     }
 }
 
 pub mod query {
-    use cosmwasm_std::{Order, StdError};
-    use cw_storage_plus::Bound;
+    use cosmwasm_std::StdError;
 
-    use crate::{
-        msg::{GetList, GetToDoResponse},
-        state::LIST,
-    };
+    use crate::state::LIST;
+    use to_do_dapp_package::contract::GetToDoResponse;
 
     use super::*;
 
@@ -176,31 +177,31 @@ pub mod query {
     }
 
     // Limits for pagination
-    const MAX_LIMIT: u32 = 30;
-    const DEFAULT_LIMIT: u32 = 10;
+    // const MAX_LIMIT: u32 = 30;
+    // const DEFAULT_LIMIT: u32 = 10;
 
-    pub fn get_list(
-        deps: Deps,
-        start_after: Option<u64>,
-        limit: Option<u32>,
-    ) -> StdResult<GetList> {
-        let limit = limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT) as usize;
-        let start = start_after.map(Bound::exclusive);
-        let entries: StdResult<Vec<_>> = LIST
-            .range(deps.storage, start, None, Order::Ascending)
-            .take(limit)
-            .collect();
-        let result = GetList {
-            tasks: entries?.into_iter().map(|l| l.1).collect(),
-        };
-
-        Ok(result)
-    }
+    // pub fn get_list(
+    //     deps: Deps,
+    //     start_after: Option<u64>,
+    //     limit: Option<u32>,
+    // ) -> StdResult<GetList> {
+    //     let limit = limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT) as usize;
+    //     let start = start_after.map(Bound::exclusive);
+    //     let entries: StdResult<Vec<_>> = LIST
+    //         .range(deps.storage, start, None, Order::Ascending)
+    //         .take(limit)
+    //         .collect();
+    //     let result = GetList {
+    //         tasks: entries?.into_iter().map(|l| l.1).collect(),
+    //     };
+    //
+    //     Ok(result)
+    // }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::msg::GetToDoResponse;
+    use to_do_dapp_package::contract::GetToDoResponse;
 
     use super::*;
     use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};

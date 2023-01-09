@@ -1,0 +1,12 @@
+[package]
+name = "interfaces"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+boot-core = "0.5.0"
+to-do-dapp-package = { version = "0.1.0", path = "../contract" }
+cosmwasm-std = "1.1.9"
+cw-multi-test = "0.16.2"

@@ -1,0 +1,15 @@
+[package]
+name = "scripts"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0.68"
+dotenv = "0.15.0"
+interfaces = { version = "0.1.0", path = "../packages/interfaces" }
+log = "0.4.17"
+boot-core = "0.5.0"
+tokio = "1.24.1"
+env_logger = "0.10.0"
